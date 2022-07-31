@@ -1,0 +1,566 @@
+<!doctype html>
+<html lang="en">
+
+	<head>
+		<meta charset="utf-8">
+
+		<title>Working efficiently with Stata in shared computing environments</title>
+
+		<meta name="description" content="Working efficiently with Stata in shared computing environments">
+		<meta name="author" content="William Buchanan, Ph.D.">
+
+		<meta name="apple-mobile-web-app-capable" content="yes">
+		<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
+		<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+		<link rel="stylesheet" href="dist/reset.css">
+		<link rel="stylesheet" href="dist/reveal.css">
+		<link rel="stylesheet" href="dist/theme/black.css" id="theme">
+		<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.6.0/styles/nnfx-dark.min.css">
+
+		<!-- Theme used for syntax highlighting of code
+		<link rel="stylesheet" href="plugin/highlight/zenburn.css">
+		-->
+	</head>
+	<body>
+		<div class="reveal">
+			<div class="slides">
+				<section>
+					<h2>Working Efficiently with Stata in Shared Computing Environments</h2>
+					<a href="https://github.com/wbuchanan" target="_blank">Billy Buchanan</a><br>
+					<span>Senior Research Scientist</span><br>
+					<span><a href="https://sagcorp.com/" target="_blank">SAG Corporation</a></span>
+					<aside class="notes">
+						<ul>
+							<li>Everything here is my personal opinion and does not necessarily reflect the opinion of my employer or any of our clients/customers/partners.</li>
+						</ul>
+					</aside>
+				</section>
+
+				<section>
+					<section>
+						<h1 class="r-fit-text">Shared Computing Constraints</h1>
+					</section>
+					<section>
+						<ul>
+							<li>Disk</li>
+							<li>Compute</li>
+							<li>Memory</li>
+							<li class="fragment fade-down">People</li>
+						</ul>
+						<aside class="notes">
+							<ul>
+								<li>There are three constraints that we can control in a shared computing environment.</li>
+								<li>The fourth constraint is beyond our control: the number of users.</li>
+								<li>These three constraints interact with each other in your session and between sessions.</li>
+								<li>There are no true solutions, but there are ways to balance across the constraints in your environment.</li>
+							</ul>
+						</aside>
+					</section>
+				</section>
+
+				<!-- Disk/Storage Constraints -->
+				<section>
+					<section>
+						<h2>Disk/Memory Issues</h2>
+					</section>
+					<section data-autoslide="3000">
+						<ul>
+							<li>Sparse Matrices</li>
+							<li>String Storage</li>
+							<li>Inefficient Data Typing</li>
+						</ul>
+						<aside class="notes">
+							<ul>
+								<li>These are three fairly common scenarios that create disk/storage inefficiencies.</li>
+								<li>They also create issues with memory consumption as well.</li>
+								<li>Some ideas may help with disk, but make memory consumption worse and vice versa.</li>
+							</ul>
+						</aside>
+					</section>
+					<section>
+						<h3>Sparse Matrices</h3>
+						<ul>
+							<li><code>reshape wide</code> can provide a benefit to long sparse datasets.</li>
+							<li>If sparsity is due to inferable value:</li>
+								<ol>
+									<li><code>reshape long ..., i(idvariables)</code></li>
+									<li><code>drop if condition</code></li>
+									<li><code>save optimalSizeFile.dta, replace</code></li>
+								</ol>
+							<li>Use the Python API to store data in compressed formats.</li>
+						</ul>
+						<aside class="notes">
+							<ul>
+								<li>If you have many values that are repeated, reshape wide stores that information once in the varname.</li>
+								<li>However, you still end up storing a lot of missing/inferable values that you could discard.</li>
+								<li>If you can infer the values using other data in the dataset, you are storing redundant information.</li>
+								<li>Discard redundancies to optimize disk space.  This is what DBAs will call normalization.</li>
+							</ul>
+						</aside>
+					</section>
+					<section>
+						<pre style="width: 150%!important;">
+							<code class="language-stata" data-trim data-line-numbers="46-50|52-59|67-71|76-80|85-90">
+								// Clear data from memory
+								clear
+
+								// Set the pseudorandom number seed
+								set seed 7779311
+
+								// Set a local for the number of observations
+								loc obs 1000000
+
+								// Set a local for the number of score variables
+								loc nscores 500
+
+								// Set the average number of scores observed for the observations
+								loc muscores 10
+
+								// Set the number of observations in the dataset
+								set obs `obs'
+
+								// Create an ID variable
+								g long id = _n
+
+								// Create a variable for the number of scores observed for each observation
+								g byte nscores = rpoisson(`muscores')
+
+								// Expand the dataset to create the score variable indices
+								expandcl `nscores', cl(id) gen(scidx)
+
+								// Create index within id
+								bys id: g int scoreidx = _n
+
+								// Create a random uniform to shuffle the scores within individuals
+								bys id: g double shuffle = runiform()
+
+								// Sort the data within id by the shuffle variable
+								sort id shuffle
+
+								// Create a new variable with a score for nscores scores within each individual
+								by id: g byte value = round(runiformint(0, 100), 10) if _n <= nscores
+
+								// Create an indicator for whether the individual has a specific score
+								g byte has = !mi(value)
+
+								// Get rid of the variable I had to generate with expandcl
+								drop scidx shuffle
+
+								// Save the version of the file that is long, but not fully optimized
+								qui: save sparseLong.dta, replace
+
+								// Size 5245.21M
+								// Memory 6208M
+
+								// Reshape the data into a common form that is extremely sparse
+								greshape wide value has, i(id) j(scoreidx) nochecks
+
+								// save in this format
+								qui: save sparseWide.dta, replace
+
+								// Size 958.44M
+								// Memory 1248M
+
+								// Make long again
+								greshape long value has, i(id) j(scoreidx) nochecks
+
+								// Size 5245.21M
+								// Memory 6208M
+
+								// Keep only records that have data
+								keep if !mi(has, value)
+
+								// Size 104.91M
+								// Memory 192M
+
+								// Save a copy of the file with the redundant variable
+								qui: save denseWRedundancy.dta, replace
+
+								// Get rid of redundant indicator
+								drop has
+
+								// Size 95.37M
+								// Memory 160M
+
+								// Save with full optimization
+								qui: save denseWORedundancy.dta, replace
+
+								// See disk use:
+								! ls -ohU *se*.dta
+								sparseLong.dta        4.2G
+								sparseWide.dta        960M
+								denseWRedundancy.dta  105M
+								denseWORedundancy.dta 96M
+							</code>
+						</pre>
+						<aside class="notes">
+							<ul>
+								<li>Simulated 1M records with 500 different measurements an average of 10 observed values and an indicator of whether the value was observed for the individual</li>
+								<li>Clearly storing the long sparse dataset was the worst and reshaping to wide provided a significant benefit.</li>
+								<li>Removing the missing values in long format provided even greater benefit.</li>
+								<li>Removing the redundant indicator and storing the data in a dense format reduced the wide file size to 10% of its size.</li>
+								<li>Using the parquet format with default compression the sparseLong file was < 50% the size of the Stata file.</li>
+							</ul>
+						</aside>
+					</section>
+					<section>
+						<h3>String Storage</h3>
+						<ul>
+							<li><code>strL</code> can help with storage.</li>
+							<li><code>strL</code> can help with memory too.</li>
+							<li>Both cases depend on string length and repeated values.</li>
+						</ul>
+						<aside class="notes">
+							<ul>
+								<li>While you might think that anything > 9 characters would be a good candidate for strLs, that isn't necessarily true.</li>
+								<li>Stata will try to use linked strLs, but it isn't clear when/how this happens.</li>
+								<li>strLs also seem to use a considerable amount of internal overhead and don't become more efficient than str# types until around 45 characters or so in length.</li>
+							</ul>
+						</aside>
+					</section>
+					<section>
+						<pre>
+							<code class="language-stata" data-trim data-line-numbers="106-111|113-124">
+								// Defines a mata function used to create random strings
+								// Start mata interpreter
+								mata:
+
+									// Clear anything from Mata's memory
+									mata clear
+
+									// Does not return anything
+									void rstring(real scalar obs, real scalar strlen, string scalar varnm) {
+
+										// Declare variable to store the ASCII values of the random string
+										real matrix idchars
+
+										// Declare variable to store the string from the ASCII codes in idchars
+										string matrix ids
+
+										// Declares a variable to iterate over the matrices
+										real scalar i
+
+										// Creates a matrix of random ints used to create mappings to ASCII
+										// with dimensions of observations by number of characters in the ID
+										idchars = runiformint(obs, strlen, 48, 123)
+
+										// Creates the matrix to store the ID strings
+										ids = J(obs, 1, "")
+
+										// Iterate over the rows of the ID chars matrix
+										for(i = 1; i <= obs; i++) {
+
+											// Convert the row vector into a string scalar and store it
+											ids[i, 1] = char(idchars[i, .])
+
+										} // End loop over the matrix
+
+										// Store the ID strings in the Stata dataset
+										st_sstore(., varnm, ids)
+
+									} // End Mata Function definition
+
+								// End the Mata interpreter
+								end
+
+								// Loop over values of string lengths
+								foreach i in 10 13 44 45 55 {
+
+									// Clear data from memory
+									clear
+
+									// Set the pseudorandom number seed
+									set seed 7779311
+
+									// Set a local for the number of observations
+									loc obs 1000000
+
+									// Set a local for the length of the string ID 15 seems to be the point where
+									// the strL is more efficient
+									loc strlen `i'
+
+									// Set the average number of repeated observations per individual
+									loc mureps 8
+
+									// Set the number of observations in the dataset
+									set obs `obs'
+
+									// Create the container for the IDs
+									g str`strlen' id = ""
+
+									// Populate the ID variable using the Mata function defined above
+									mata: rstring(`obs', `strlen', "id")
+
+									// Create the number of repeated observations per individual
+									g byte iobs = rpoisson(`mureps')
+
+									// Expand the dataset to create the repeated observations
+									expandcl iobs, cl(id) gen(newcl)
+
+									// Drop the variables that aren't needed
+									drop newcl iobs
+
+									// Create a time variable with the sequence of records per individual
+									bys id: g byte time = _n
+
+									// Store the example dataset
+									save savedAsstr`strlen'.dta, replace
+
+									// Get memory report
+									memory
+
+									// sort the dataset
+									sort id time
+
+									// Recast the ids to strLs
+									recast strL id
+
+									// Store the compressed dataset
+									qui: save savedAsstr`strlen'L.dta, replace
+
+									// Get the memory report after recasting to strL
+									memory
+
+									// See if compress recasts the strL
+									compress, coalesce
+
+								} // End loop over string lengths
+
+								// String Length  | Recasted Type
+								// 10             | str10
+								// 13             | str13
+								// 44             | str44
+								// 45             | strL
+								// 55             | strL
+
+								// Get the file sizes for each of the two files
+								! ls -ohU savedAsstr*.dta
+								savedAsstr10.dta  84M
+								savedAsstr10L.dta 99M
+								savedAsstr13.dta  107M
+								savedAsstr13L.dta 102M
+								savedAsstr44.dta  344M
+								savedAsstr44L.dta 131M
+								savedAsstr45.dta  352M
+								savedAsstr45L.dta 132M
+								savedAsstr55.dta  428M
+								savedAsstr55L.dta 142M
+							</code>
+						</pre>
+						<aside class="notes">
+							<ul>
+								<li>Simulated 1M observations observed over an average of 8 periods with string IDs of 10, 13, 44, 45, and 55 characters in length.</li>
+								<li>Despite the repeated IDs, strLs didn't provide the benefit that the dta specification would imply on disk.</li>
+								<li>However, it wasn't only a difference in a few characters from what I anticipated.</li>
+								<li>strLs in memory, however, seem to use considerably more memory than strings until the string length is fairly long.</li>
+							</ul>
+						</aside>
+					</section>
+					<section>
+						<h3>Inefficient Data Typing</h3><br>
+						<ul>
+							<li>Always specify types at creation: <br><code>g byte adummy = mi(brains)</code></li>
+							<li>see <code>help data types</code></li>
+							<li>use <code>compress</code> afterwards just to be sure.</li>
+						</ul>
+						<aside class="notes">
+							<ul>
+								<li>If you are creating a variable you can approximate the range of values and use the information to appropriately cast the variable.</li>
+								<li>compress is a great easy way to optimize the storage types of your data if you're not already aware of/using it.</li>
+								<li>Note that compress will not recast long strings to strL even if it would result in less memory being consumed.</li>
+							</ul>
+						</aside>
+					</section>
+				</section>
+
+				<!-- Metadata for Infrastructure/Documentation -->
+				<section>
+					<section>
+						<h2>Workflow and Documentation</h2>
+					</section>
+					<section data-autoslide="3000">
+						<li>Data Documentation and Organization</li>
+						<li>Code Organization</li>
+					</section>
+					<section>
+						<h3>Data Documentation and Organization</h3>
+						<ul>
+							<li><a href="https://www.stata.com/meeting/13uk/rising_ckvarTalk.beamer.pdf" target="_blank">Rising, B. (2007)</a> self-validating datasets</li>
+							<li>Use dataset characteristics to store metadata:</li>
+							<ul>
+								<li style="font-size: 1.75rem;">Primary Key - <code>char _dta[pk] "id year industry"</code></li>
+								<li style="font-size: 1.75rem;">Verify primary key using <code>isid</code></li>
+								<li style="font-size: 1.75rem;">Foreign Key - <code>char _dta[fk_xyz.dta] "m:1 year industry"</code></li>
+							</ul>
+							<li>Take full/complete advantage of variable/value labels, notes, and characteristics.</li>
+							<!--
+							<li>Use subdirectories for raw, clean, and analysis ready data.</li>
+							-->
+						</ul>
+						<aside class="notes">
+							<ul>
+								<li>Data QA/QC can be addressed quite a bit using programs contributed by Bill Rising several years ago.</li>
+								<li>Working with multiple files requires additional information.  Storing primary key and foreign key information with your data set can help others work more effectively/efficiently.</li>
+							</ul>
+						</aside>
+					</section>
+					<section>
+						<h3>Code Organization</h3>
+						<ul>
+							<li>Use version control systems to avoid filepath shenanigans.</li>
+							<li>Prefer functionally named <code>.ado</code> over many ##*.do named scripts.</li>
+							<li><a href="https://www.stata.com/meeting/uk10/UKSUG10.Gould.pdf">Gould</a> (2010) subroutines are not used enough.</li>
+						</ul>
+						<aside class="notes">
+							<ul>
+								<li>Using number prefixes is a sure way to get into trouble with a large project.</li>
+								<li>What happens when the project is large enough that you need to implement different variants of your business rules for different questions?</li>
+								<li>Using subroutines and ado files makes it easier to adapt a process for multiple scenarios that may come up in the project using options that call subroutines.</li>
+								<li>The combination of these practices provides flexibility, a safety net, and less confusion.</li>
+							</ul>
+						</aside>
+					</section>
+				</section>
+
+				<!-- Compute Constraint -->
+				<section>
+					<section>
+						<h2>Compute Consumption</h2>
+					</section>
+					<section data-autoslide="3000">
+						<ul>
+							<li>Compute Efficient Commands</li>
+							<li>Monitoring and Modifying Consumption</li>
+							<li>Maximizing Workflow Efficiency</li>
+						</ul>
+					</section>
+					<section>
+						<h3>Compute Efficient Commands</h3>
+						<ul style="font-size: 2rem;">
+							<li><a href="https://github.com/sergiocorreia/ftools" target="_blank">ftools</a> from <a href="https://github.com/sergiocorreia" target="_blank">Correia</a> offers Mata-based variants of several Stata native commands.</li>
+							<li><a href="https://github.com/mcaceresb/stata-gtools" target="_blank">gtools</a> from <a href="https://github.com/mcaceresb" target="_blank">Bravo</a> offers a C-based plugin with variants on many Stata native commands as well.</li>
+						</ul>
+						<br>
+						<table style="font-size: 2rem;">
+							<thead>
+								<tr>
+									<td>Command</td><td>Options</td><td>Shape</td><td>Time</td>
+								</tr>
+							</thead>
+							<tbody>
+							<tr>
+								<td>reshape</td><td>N/A</td><td>wide</td><td>9,743.43</td>
+							</tr>
+							<tr>
+								<td>reshape</td><td>N/A</td><td>long</td><td>8,876.64</td>
+							</tr>
+							<tr>
+								<td>greshape</td><td>N/A</td><td>wide</td><td>137.44</td>
+							</tr>
+							<tr>
+								<td>greshape</td><td>N/A</td><td>long</td><td>46.19</td>
+							</tr>
+							<tr>
+								<td>greshape</td><td>nochecks</td><td>wide</td><td>138.70</td>
+							</tr>
+							<tr>
+								<td>greshape</td><td>nochecks</td><td>long</td><td>45.34</td>
+							</tr>
+							</tbody>
+						</table>
+						<aside class="notes">
+							<ul>
+								<li>The table shows results from reshaping the data simulated for the sparse matrix example.</li>
+								<li>ftools can perform better than some Stata native commands.</li>
+								<li>gtools can outperform ftools and has additional capabilities.</li>
+								<li>Sometimes, gtools gets things wrong.  The nocheck option should have resulted in better performance than the version without nocheck, but the timing was impressive nonetheless.</li>
+							</ul>
+						</aside>
+					</section>
+					<section>
+						<h3>Monitoring and Modifying Consumption</h3>
+						<ul>
+							<li>Use <code>set segmentsize</code> to optimize compute vs memory issues.</li>
+							<li><a href="https://wbuchanan.github.io/StataOS" target="_blank">StataOS</a> provides a way to issue shell commands and return results into Stata.</li>
+							<li>StataOS created in response to <a href="https://www.statalist.org/forums/forum/general-stata-discussion/general/1326359-finding-out-available-memory-in-a-unix-system">a StataList post</a> about monitoring available memory in Unix.</li>
+						</ul>
+						<aside class="notes">
+							<ul>
+								<li>The help for memory hints at this slightly by mentioning smaller segment sizes cause Stata to "jump around more" since the memory is not allocated as contiguously.  However, smaller segment sizes are more efficient for memory consumption.</li>
+								<li>StataOS may be challenging to use in shared computing environments if there are restrictions on using Java binaries.</li>
+								<li>However, since the source code is available and the only dependency is the JavaAPI, your IT staff can build locally from source if they have any concerns.</li>
+								<li>Will also largely depend on what permissions you have to system tools that you could call.</li>
+							</ul>
+						</aside>
+					</section>
+					<section>
+						<ul>
+							<li><a href="https://github.com/bquistorff/statacons" target="_blank"><code>statacons</code></a></li>
+							<li><a href="https://osf.io/preprints/metaarxiv/qesx6/download" target="_blank">Guiteras, Ahnjeong, Quistorff, & Shumway (in review). <code>statacons</code>: An SCons-based build tool for Stata.</a></li>
+							<li>Uses the Python API and SCons to run only what is needed in your project based on the dependencies and outputs you define.</li>
+						</ul>
+
+						<aside class="notes">
+							<ul>
+								<li>If you're familiar with tools like make, this is similar but applied to Stata projects.</li>
+								<li>Tracks status of source code, data, and outputs and runs tasks needed to update outdated outputs.</li>
+								<li>Reduces compute by ensuring you only recompute what is needed when it is needed.</li>
+							</ul>
+						</aside>
+					</section>
+
+				</section>
+
+				<section data-visibility="hidden">
+					<section>
+						<h2>Additional Thoughts/Ideas</h2>
+						<aside class="notes">
+							<p>These are essentially suggestions that Stata could consider, but may be possible for users to consider contributing to as well.</p>
+						</aside>
+					</section>
+					<section>
+						<ul>
+							<li>Automatically adjusting the segment size of memory</li>
+							<li>Memory estimation prefix for commands</li>
+							<li>String data optimization/efficiency improvements</li>
+						</ul>
+						<aside class="notes">
+							<ul>
+								<li>If there is greater memory pressure than compute pressure, reducing segment size automatically would balance the memory efficiency with some additional compute.</li>
+								<li>Basically a prefix that would provide some type of estimate of the amount of memory needed for a command to execute, particularly estimation commands, but also some data management tasks like reshape/merge.  Would return some esimate that could be used to determine if sufficient memory is available prior to execution.</li>
+								<li>There are functions to interact directly with value labels (strings) efficiently, and they are already stored in a highly optimized form.  Is it possible that this could be extended in some way to further optimize storage/memory for string data?</li>
+							</ul>
+						</aside>
+					</section>
+				</section>
+
+			</div>
+
+		</div>
+
+		<script src="dist/reveal.js"></script>
+		<script src="plugin/zoom/zoom.js"></script>
+		<script src="plugin/notes/notes.js"></script>
+		<script src="plugin/search/search.js"></script>
+		<script src="plugin/markdown/markdown.js"></script>
+		<script src="plugin/highlight/highlight.js"></script>
+		<script>
+
+			// Also available as an ES module, see:
+			// https://revealjs.com/initialization/
+			Reveal.initialize({
+				controls: true,
+				progress: true,
+				center: true,
+				hash: true,
+
+				// Learn about plugins: https://revealjs.com/plugins/
+				plugins: [ RevealZoom, RevealNotes, RevealSearch, RevealMarkdown, RevealHighlight ]
+			});
+
+		</script>
+
+	</body>
+</html>
