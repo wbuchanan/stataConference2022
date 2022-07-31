@@ -513,23 +513,23 @@
 
 				</section>
 
-				<section data-visibility="hidden">
-					<section>
-						<h2>Additional Thoughts/Ideas</h2>
+				<section>
+					<section data-autoslide="3000">
+						<h2>Final Thoughts/Ideas</h2>
 						<aside class="notes">
 							<p>These are essentially suggestions that Stata could consider, but may be possible for users to consider contributing to as well.</p>
 						</aside>
 					</section>
 					<section>
 						<ul>
-							<li>Automatically adjusting the segment size of memory</li>
-							<li>Memory estimation prefix for commands</li>
-							<li>String data optimization/efficiency improvements</li>
+							<li>Memory estimation prefix for commands.</li>
+							<li>Automatic adjustment of memory segment size.</li>
+							<li>String data optimization/efficiency improvements.</li>
 						</ul>
 						<aside class="notes">
 							<ul>
-								<li>If there is greater memory pressure than compute pressure, reducing segment size automatically would balance the memory efficiency with some additional compute.</li>
 								<li>Basically a prefix that would provide some type of estimate of the amount of memory needed for a command to execute, particularly estimation commands, but also some data management tasks like reshape/merge.  Would return some esimate that could be used to determine if sufficient memory is available prior to execution.</li>
+								<li>If there is greater memory pressure than compute pressure, reducing segment size automatically would balance the memory efficiency with some additional compute.</li>
 								<li>There are functions to interact directly with value labels (strings) efficiently, and they are already stored in a highly optimized form.  Is it possible that this could be extended in some way to further optimize storage/memory for string data?</li>
 							</ul>
 						</aside>
